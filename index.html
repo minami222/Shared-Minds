@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stream of Consciousness Flower</title>
+  <style>
+    /* Reset & Base Layout */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: #000000;
+      color: #ffffff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    /* Canvas: fills the visual area for the flower */
+    #flowerCanvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      cursor: default;
+    }
+
+    /* Top title & hint */
+    .header {
+      position: absolute;
+      top: 24px;
+      text-align: center;
+      pointer-events: none;
+      z-index: 10;
+      opacity: 0.8;
+      transition: opacity 0.5s ease;
+    }
+
+    .header h1 {
+      font-size: 1.1rem;
+      font-weight: 300;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+      color: rgba(255, 255, 255, 0.9);
+      text-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+    }
+
+    .header p {
+      font-size: 0.75rem;
+      letter-spacing: 0.12em;
+      color: rgba(255, 255, 255, 0.4);
+    }
+
+    /* Input Container pinned to bottom */
+    .input-container {
+      position: absolute;
+      bottom: 40px;
+      width: 90%;
+      max-width: 480px;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .thought-input {
+      width: 100%;
+      background: rgba(15, 15, 15, 0.75);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 24px;
+      padding: 12px 20px;
+      font-size: 0.95rem;
+      color: #ffffff;
+      outline: none;
+      text-align: center;
+      letter-spacing: 0.05em;
+      backdrop-filter: blur(8px);
+      transition: border-color 0.3s, box-shadow 0.3s;
+    }
+
+    .thought-input::placeholder {
+      color: rgba(255, 255, 255, 0.3);
+      font-style: italic;
+    }
+
+    .thought-input:focus {
+      border-color: rgba(255, 255, 255, 0.6);
+      box-shadow: 0 0 15px rgba(255, 255, 255, 0.15);
+    }
+
+    .input-tip {
+      font-size: 0.7rem;
+      letter-spacing: 0.08em;
+      color: rgba(255, 255, 255, 0.35);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Title & Interaction Hint -->
+  <header class="header">
+    <h1>Stream of Consciousness Flower</h1>
+    <p>Type thoughts into cherry blossom petals &bull; Japanese thoughts bloom pink &amp; linger</p>
+  </header>
+
+  <!-- Canvas for rendering ASCII cherry blossom cluster -->
+  <canvas id="flowerCanvas"></canvas>
+
+  <!-- Stream of consciousness text input -->
+  <div class="input-container">
+    <input 
+      type="text" 
+      id="thoughtInput" 
+      class="thought-input" 
+      placeholder="Type a thought and press Enter..." 
+      autocomplete="off" 
+      spellcheck="false" 
+      maxlength="500" 
+      autofocus 
+    />
+    <div class="input-tip">Press Enter to bloom a thought &bull; Fresh thoughts re-open wilted blossoms</div>
+  </div>
+
+  <script>
+    /**
+     * STREAM OF CONSCIOUSNESS FLOWER
+     * 
+     * Architecture:
+     * 1. Petal Math: Polar-based 5-petal cherry blossom silhouette.
+     * 2. Multi-blossom Cluster: Up to 3 independent blossoms staggered in a cluster.
+     * 3. Wilting: Independent per-blossom bloomScale shrink + per-character fade rate variance.
+     * 4. Future Extension: Character objects include a 'lang' and color hook for upcoming
+     *    Japanese support (orange highlights) and code-switching detection.
+     */
+
+    const canvas = document.getElementById('flowerCanvas');
+    const ctx = canvas.getContext('2d');
+    const input = document.getElementById('thoughtInput');
+
+    // Canvas sizing with Retina display (DPR) support
+    let width = 0;
+    let height = 0;
+    let centerX = 0;
+    let centerY = 0;
+    let dpr = window.devicePixelRatio || 1;
+
+    function resizeCanvas() {
+      dpr = window.devicePixelRatio || 1;
+      width = window.innerWidth;
+      height = window.innerHeight;
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      ctx.scale(dpr, dpr);
+      centerX = width / 2;
+      // Position cluster slightly above center to balance bottom input
+      centerY = height / 2 - 25;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // ==========================================
+    // Cherry Blossom Silhouette Model (Polar Math)
+    // ==========================================
+    const CHAR_WIDTH = 9.2; // Monospace character pitch in pixels
+    const ROW_HEIGHT = 14;  // Vertical line spacing in pixels
+
+    /**
+     * Polar-based 5-petal cherry blossom test with rotation offset & sharp notches (0.18 exponent)
+     */
+    function isInsideBlossom(px, py, radius, rotation = 0) {
+      const dist = Math.sqrt(px * px + py * py);
+      const angle = Math.atan2(py, px) - rotation;
+      const petalCount = 5;
+      const petalR = radius * (0.55 + 0.45 * Math.pow(Math.abs(Math.cos(petalCount / 2 * angle)), 0.18));
+      return dist <= petalR;
+    }
+
+    /**
+     * Precompute character coordinate slots inside a blossom bounding box
+     * using flat single-density grid-scanning.
+     */
+    function generateBlossomSlots(radius, rotation = 0) {
+      const slots = [];
+      const numRows = Math.floor(radius / ROW_HEIGHT);
+      const numCols = Math.floor(radius / CHAR_WIDTH);
+
+      for (let r = -numRows; r <= numRows; r++) {
+        const y = r * ROW_HEIGHT;
+        for (let c = -numCols; c <= numCols; c++) {
+          const x = c * CHAR_WIDTH;
+          if (isInsideBlossom(x, y, radius, rotation)) {
+            slots.push({ x, y });
+          }
+        }
+      }
+      return slots;
+    }
+
+    // ==========================================
+    // Multi-Blossom Cluster Configuration & State
+    // ==========================================
+    const MAX_BLOSSOMS = 3;
+    const blossomPositions = [
+      { x: -200, y: 0, rotation: Math.random() * Math.PI * 2 },
+      { x: 80, y: -110, rotation: Math.random() * Math.PI * 2 },
+      { x: 150, y: 130, rotation: Math.random() * Math.PI * 2 }
+    ];
+    let blossoms = []; // each: { x, y, radius, rotation, slots: [], characters: [], bloomScale: 1.0, wilted: false, wiltRate: WILT_RATE, currentSlotIndex: 0 }
+
+    const WILT_RATE = 0.00008; // Base rate at which each blossom silhouette closes inward
+
+    /**
+     * Count character coordinate slots inside a blossom bounding box
+     * without object allocation for fast radius capacity checks.
+     */
+    function countSlotsForRadius(radius) {
+      const numRows = Math.floor(radius / ROW_HEIGHT);
+      const numCols = Math.floor(radius / CHAR_WIDTH);
+      let count = 0;
+
+      for (let r = -numRows; r <= numRows; r++) {
+        const y = r * ROW_HEIGHT;
+        for (let c = -numCols; c <= numCols; c++) {
+          const x = c * CHAR_WIDTH;
+          if (isInsideBlossom(x, y, radius, 0)) {
+            count++;
+          }
+        }
+      }
+      return count;
+    }
+
+    /**
+     * Calculate radius from slot capacity so the blossom grows until
+     * its slot count can fit all characters in the thought.
+     */
+    function getRadiusForText(text) {
+      const len = text.replace(/\s/g, '').length;
+      const minRadius = 85;   // was 110
+      const maxRadius = 160;  // was 220
+      let radius = minRadius;
+
+      // grow radius until the blossom's slot count can fit all characters
+      while (radius < maxRadius) {
+        const testSlots = countSlotsForRadius(radius); // reuse slot check, counting without object allocation
+        if (testSlots >= len) break;
+        radius += 5;
+      }
+      return Math.min(radius, maxRadius);
+    }
+
+    // ==========================================
+    // Sentiment & Language Dictionaries
+    // ==========================================
+    const NEGATIVE_WORDS_EN = ['not', "can't", 'never', 'fail', 'failed', 'alone', 'lonely', 'sad', 'hate', 'hurt', 'wrong', 'bad', 'worthless', 'tired', 'stressed', 'anxious', 'afraid', 'scared'];
+    const NEGATIVE_WORDS_JA = ['できない', '無理', '失敗', '寂しい', '悲しい', '不安', '嫌', '辛い', '疲れた', '怖い', 'ダメ'];
+
+    function getNegativityRatio(text) {
+      const lower = text.toLowerCase();
+      let hits = 0;
+      NEGATIVE_WORDS_EN.forEach(w => { if (lower.includes(w)) hits++; });
+      NEGATIVE_WORDS_JA.forEach(w => { if (text.includes(w)) hits++; });
+      // cap contribution so one thought can't overshoot
+      return Math.min(1, hits / 3);
+    }
+
+    /**
+     * Identifies character indices in a thought that belong to negative words
+     */
+    function getNegativeCharIndices(text) {
+      const isNegative = new Array(text.length).fill(false);
+      const lower = text.toLowerCase();
+
+      // Match English negative words with word boundaries
+      for (const word of NEGATIVE_WORDS_EN) {
+        let startPos = 0;
+        while ((startPos = lower.indexOf(word, startPos)) !== -1) {
+          const beforeChar = startPos > 0 ? lower[startPos - 1] : ' ';
+          const afterChar = startPos + word.length < lower.length ? lower[startPos + word.length] : ' ';
+          const isWordBoundary = !/[a-z0-9]/.test(beforeChar) && !/[a-z0-9]/.test(afterChar);
+
+          if (isWordBoundary || word.includes("'")) {
+            for (let k = startPos; k < startPos + word.length; k++) {
+              isNegative[k] = true;
+            }
+          }
+          startPos += word.length;
+        }
+      }
+
+      // Match Japanese negative words as substrings
+      for (const word of NEGATIVE_WORDS_JA) {
+        let startPos = 0;
+        while ((startPos = text.indexOf(word, startPos)) !== -1) {
+          for (let k = startPos; k < startPos + word.length; k++) {
+            isNegative[k] = true;
+          }
+          startPos += word.length;
+        }
+      }
+
+      return isNegative;
+    }
+
+    /**
+     * Detect Japanese character (Hiragana, Katakana, Kanji) vs English/other
+     */
+    function detectLang(char) {
+      const code = char.charCodeAt(0);
+      const isJapanese = (code >= 0x3040 && code <= 0x30FF) || (code >= 0x4E00 && code <= 0x9FFF);
+      return isJapanese ? 'ja' : 'en';
+    }
+
+    /**
+     * Compute Japanese character ratio of a thought (excluding whitespace)
+     */
+    function getJapaneseRatio(text) {
+      const chars = text.split('').filter(c => c !== ' ');
+      if (chars.length === 0) return 0;
+      const jaCount = chars.filter(c => detectLang(c) === 'ja').length;
+      return jaCount / chars.length;
+    }
+
+    /**
+     * Creates a new character particle placed at a specific silhouette slot.
+     */
+    function createFlowerCharacter(char, slot, slotIndex, fadeMultiplier = 1.0, isNegativeWord = false) {
+      // Individual fade rate variation, scaled by thought language multiplier
+      const baseFade = 0.0011;
+      const variation = 0.6 + Math.random() * 0.8; // 0.6x to 1.4x
+
+      // Negative words linger much longer on the blossom than ordinary words
+      const wordPersistence = isNegativeWord ? 0.35 : 1.0;
+      const fadeRate = baseFade * variation * fadeMultiplier * wordPersistence;
+
+      // Language detection & color assignment: Pink (#FFC0CB) for Japanese, white for English
+      const lang = detectLang(char);
+      const color = lang === 'ja' ? '#FFC0CB' : '#ffffff';
+
+      return {
+        char: char,
+        // Position relative to blossom center
+        x: slot.x,
+        y: slot.y,
+        slotIndex: slotIndex,
+
+        // Life & Wilting state
+        opacity: 1.0,
+        glowIntensity: 1.0,       // Glow starts at maximum right after typing
+        fadeRate: fadeRate,
+
+        // Color & Language classification
+        color: color,
+        lang: lang,
+        isNegativeWord: isNegativeWord
+      };
+    }
+
+    /**
+     * Sequential filling of a blossom with a thought's characters.
+     */
+    function fillBlossomWithThought(blossom, text, fadeMultiplier = 1.0) {
+      const chars = text.split('');
+      const negativeMask = getNegativeCharIndices(text);
+
+      for (let i = 0; i < chars.length; i++) {
+        const ch = chars[i];
+        const slotIdx = blossom.currentSlotIndex % blossom.slots.length;
+        const slot = blossom.slots[slotIdx];
+
+        // Ensure only one character fills this slot (no overlapping)
+        const existingIndex = blossom.characters.findIndex(c => c.slotIndex === slotIdx);
+        if (existingIndex !== -1) {
+          blossom.characters.splice(existingIndex, 1);
+        }
+
+        // Place character particle with negative word persistence tag
+        const isNegativeWord = negativeMask[i] || false;
+        const particle = createFlowerCharacter(ch, slot, slotIdx, fadeMultiplier, isNegativeWord);
+        blossom.characters.push(particle);
+
+        // Advance sequentially one slot at a time
+        blossom.currentSlotIndex = (blossom.currentSlotIndex + 1) % blossom.slots.length;
+      }
+    }
+
+    /**
+     * Thought-to-blossom mapping:
+     * - If < 3 blossoms exist, create a new blossom at next unused position.
+     * - If 3 blossoms already exist, place into whichever is most wilted (lowest bloomScale).
+     * - Dynamically scales blossom radius and recomputes slot grid based on thought length.
+     * - Adjusts wilt rate and character fade rate according to Japanese & negativity ratio.
+     */
+    function addThought(text) {
+      if (!text || !text.trim()) return;
+
+      let targetBlossom;
+      if (blossoms.length < MAX_BLOSSOMS) {
+        const pos = blossomPositions[blossoms.length];
+        targetBlossom = {
+          x: pos.x,
+          y: pos.y,
+          radius: 0,
+          rotation: pos.rotation,
+          slots: [],
+          characters: [],
+          bloomScale: 1.0,
+          wilted: false,
+          wiltRate: WILT_RATE,
+          currentSlotIndex: 0
+        };
+        blossoms.push(targetBlossom);
+      } else {
+        // Find most wilted blossom (lowest bloomScale)
+        targetBlossom = blossoms[0];
+        for (let i = 1; i < blossoms.length; i++) {
+          if (blossoms[i].bloomScale < targetBlossom.bloomScale) {
+            targetBlossom = blossoms[i];
+          }
+        }
+        targetBlossom.bloomScale = 1.0;
+        targetBlossom.wilted = false;
+        targetBlossom.characters = [];
+        targetBlossom.currentSlotIndex = 0;
+      }
+
+      // Scale blossom radius dynamically based on thought slot capacity and build slots
+      targetBlossom.radius = getRadiusForText(text);
+      targetBlossom.slots = generateBlossomSlots(targetBlossom.radius, targetBlossom.rotation);
+
+      // If thought still exceeds maxRadius capacity, truncate text (not shape) so flower stays complete
+      const maxChars = targetBlossom.slots.length;
+      const processedText = text.length > maxChars ? text.slice(0, maxChars) : text;
+
+      // Language & Negativity wilt speed calculation
+      const jaRatio = getJapaneseRatio(processedText);
+      const negRatio = getNegativityRatio(processedText);
+      const langFactor = 1.6 - jaRatio * 1.2;      // still English faster, Japanese slower
+      const negFactor = 1 - negRatio * 0.5;
+      const combinedFactor = Math.max(0.35, langFactor * negFactor); // floor so nothing lasts near-forever
+
+      targetBlossom.wiltRate = WILT_RATE * combinedFactor;
+
+      fillBlossomWithThought(targetBlossom, processedText, combinedFactor);
+    }
+
+    // ==========================================
+    // User Interaction: Typing
+    // ==========================================
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const thought = input.value;
+        if (thought.trim()) {
+          addThought(thought);
+          input.value = '';
+        }
+      }
+    });
+
+    // ==========================================
+    // Main Animation Loop
+    // ==========================================
+    function animate() {
+      requestAnimationFrame(animate);
+
+      // 1. Clear Canvas with clean black background
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, width, height);
+
+      // 2. Update and render each blossom independently
+      for (let b = 0; b < blossoms.length; b++) {
+        const blossom = blossoms[b];
+        const currentWiltRate = blossom.wiltRate || WILT_RATE;
+
+        // Blossom wilting shrink logic
+        blossom.bloomScale = Math.max(0.15, blossom.bloomScale - currentWiltRate);
+        if (blossom.bloomScale <= 0.15 && blossom.characters.length === 0) {
+          blossom.wilted = true;
+        }
+
+        const bCenterX = centerX + blossom.x;
+        const bCenterY = centerY + blossom.y;
+
+        // Subtle ambient center bud glow scaled with blossom bloom
+        if (blossom.characters.length > 0) {
+          const glowRadius = Math.max(18, (blossom.radius * 0.75) * blossom.bloomScale);
+          const budGrad = ctx.createRadialGradient(bCenterX, bCenterY, 0, bCenterX, bCenterY, glowRadius);
+          const isJapaneseBlossom = blossom.wiltRate < WILT_RATE;
+          const budColor = isJapaneseBlossom ? '255, 192, 203' : '255, 255, 255';
+          budGrad.addColorStop(0, `rgba(${budColor}, 0.035)`);
+          budGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+          ctx.fillStyle = budGrad;
+          ctx.beginPath();
+          ctx.arc(bCenterX, bCenterY, glowRadius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Render and Update Characters in this blossom
+        for (let i = blossom.characters.length - 1; i >= 0; i--) {
+          const p = blossom.characters[i];
+
+          // --- Wilting Lifecycle ---
+          p.opacity -= p.fadeRate;
+          p.glowIntensity = Math.max(0, p.opacity * 1.3 - 0.25);
+
+          // Remove completely wilted characters
+          if (p.opacity <= 0) {
+            blossom.characters.splice(i, 1);
+            continue;
+          }
+
+          // --- Positioning (Static rows scaled per-blossom by bloomScale) ---
+          const x = bCenterX + p.x * blossom.bloomScale;
+          const y = bCenterY + p.y * blossom.bloomScale;
+
+          ctx.save();
+          ctx.translate(x, y);
+
+          // Blank spaces occupy their slot to prevent overlap, but render blank
+          if (p.char === ' ') {
+            ctx.restore();
+            continue;
+          }
+
+          // --- RGB Base from p.color ---
+          const rgbBase = p.color === '#FFC0CB' ? '255, 192, 203' : '255, 255, 255';
+
+          // --- Glowing Aesthetic ---
+          if (p.glowIntensity > 0.04) {
+            const glowAlpha = Math.min(1, p.glowIntensity * 0.95);
+            ctx.shadowColor = `rgba(${rgbBase}, ${glowAlpha})`;
+            ctx.shadowBlur = 5 + p.glowIntensity * 12; // 5px to 17px glow
+          } else {
+            ctx.shadowBlur = 0;
+          }
+
+          // --- Typography (Clean Monospace ASCII Density Map) ---
+          ctx.font = '600 13px "Courier New", Courier, monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+
+          // Render Character in assigned color with opacity
+          ctx.fillStyle = `rgba(${rgbBase}, ${p.opacity.toFixed(3)})`;
+          ctx.fillText(p.char, 0, 0);
+
+          ctx.restore();
+        }
+      }
+    }
+
+    // Start Animation
+    requestAnimationFrame(animate);
+
+    // Initial greeting / prompt blossoming into the first cherry blossom
+    const initialSeed = "stream of consciousness flower blooming in silence";
+    addThought(initialSeed);
+  </script>
+</body>
+</html>
