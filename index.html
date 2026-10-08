@@ -1,9 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Stream of Consciousness Flower</title>
+  <title>Stream of Consciousness Flowers</title>
   <style>
     /* Reset & Base Layout */
     * {
@@ -107,11 +108,12 @@
     }
   </style>
 </head>
+
 <body>
 
   <!-- Title & Interaction Hint -->
   <header class="header">
-    <h1>Stream of Consciousness Flower</h1>
+    <h1>Stream of Consciousness Flowers</h1>
     <p>Type thoughts into cherry blossom petals &bull; Japanese thoughts bloom pink &amp; linger</p>
   </header>
 
@@ -120,20 +122,30 @@
 
   <!-- Stream of consciousness text input -->
   <div class="input-container">
-    <input 
-      type="text" 
-      id="thoughtInput" 
-      class="thought-input" 
-      placeholder="Type a thought and press Enter..." 
-      autocomplete="off" 
-      spellcheck="false" 
-      maxlength="500" 
-      autofocus 
-    />
+    <input type="text" id="thoughtInput" class="thought-input" placeholder="Type a thought and press Enter..."
+      autocomplete="off" spellcheck="false" maxlength="500" autofocus />
     <div class="input-tip">Press Enter to bloom a thought &bull; Fresh thoughts re-open wilted blossoms</div>
   </div>
 
-  <script>
+  <script type="module">
+
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getDatabase, ref, push, onChildAdded } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBp4VZMMi4KXts_ZqGLs9JkZSmfAnV78b4",
+      authDomain: "sharedminds26-809c7.firebaseapp.com",
+      databaseURL: "https://sharedminds26-809c7-default-rtdb.firebaseio.com",
+      projectId: "sharedminds26-809c7",
+      storageBucket: "sharedminds26-809c7.firebasestorage.app",
+      messagingSenderId: "102824611711",
+      appId: "1:102824611711:web:df6236df840b70c925d44a"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    const thoughtsRef = ref(db, 'sharedminds/thoughts');
+
     /**
      * STREAM OF CONSCIOUSNESS FLOWER
      * 
@@ -463,8 +475,7 @@
       if (e.key === 'Enter') {
         const thought = input.value;
         if (thought.trim()) {
-          addThought(thought);
-          input.value = '';
+          push(thoughtsRef, { text: thought, timestamp: Date.now() }); input.value = '';
         }
       }
     });
@@ -564,8 +575,15 @@
     requestAnimationFrame(animate);
 
     // Initial greeting / prompt blossoming into the first cherry blossom
-    const initialSeed = "stream of consciousness flower blooming in silence";
-    addThought(initialSeed);
+    //const initialSeed = "stream of consciousness flower blooming in silence";
+    // addThought(initialSeed);
+
+    onChildAdded(thoughtsRef, (snapshot) => {
+      const data = snapshot.val();
+      addThought(data.text);
+    });
+
   </script>
 </body>
+
 </html>
