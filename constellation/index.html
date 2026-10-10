@@ -557,8 +557,8 @@ function renderFlow() {
   if (flow.step === "capture" && !flow.photo) {
     b.innerHTML = `
       <h2 class="title" id="flowTitle">New capture</h2>
-      ${S.me.name ? "" : `<label class="field-label" for="nameInput">Your name</label>
-      <input class="input" id="nameInput" maxlength="40" autocomplete="nickname" placeholder="Type your name">`}
+      <label class="field-label" for="nameInput">Your name</label>
+      <input class="input" id="nameInput" maxlength="40" autocomplete="nickname" placeholder="Type your name" value="${esc(S.me.name)}">
       <div class="public">${icon("globe")}Public to everyone on this map</div>
       <div class="row">
         <button class="btn primary" data-action="camera">${icon("camera")}Camera</button>
@@ -595,7 +595,8 @@ $("flowBody").addEventListener("click", e => {
   const a = e.target.closest("[data-action]")?.dataset.action, pill = e.target.closest("[data-pill]")?.dataset.pill, opt = e.target.closest("[data-opt]")?.dataset.opt;
   if (a === "camera" || a === "upload") {
     const n = $("nameInput");
-    if (n) { if (!n.value.trim()) { n.focus(); toast("Add your name first"); return; } S.me.name = n.value.trim(); store.save(); }
+    if (!n.value.trim()) { n.focus(); toast("Add your name first"); return; }
+    if (n.value.trim() !== S.me.name) { S.me.name = n.value.trim(); store.save(); }
     $(a === "camera" ? "fileCam" : "fileUp").click();
   } else if (a === "retry-embed") embedFlowPhoto();
   else if (a === "show-words") { flow.showWords = true; renderFlow(); $("whyInput")?.focus(); }
