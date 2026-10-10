@@ -106,10 +106,144 @@
       letter-spacing: 0.08em;
       color: rgba(255, 255, 255, 0.35);
     }
+
+    /* Project Navigator */
+    .project-nav {
+      position: absolute;
+      top: 20px;
+      right: 24px;
+      z-index: 100;
+      font-family: inherit;
+    }
+
+    .project-nav-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: rgba(255, 255, 255, 0.85);
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .project-nav-btn:hover {
+      background: rgba(255, 255, 255, 0.16);
+      border-color: rgba(255, 255, 255, 0.3);
+      color: #fff;
+    }
+
+    .project-menu {
+      display: none;
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      width: 230px;
+      background: rgba(20, 20, 22, 0.88);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 14px;
+      padding: 6px;
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .project-menu.open {
+      display: flex;
+    }
+
+    .project-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      text-decoration: none;
+      color: rgba(255, 255, 255, 0.8);
+      transition: background 0.15s ease;
+    }
+
+    .project-item:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #fff;
+    }
+
+    .project-item.active {
+      background: rgba(255, 255, 255, 0.07);
+      border-left: 2px solid #ff9ebb;
+    }
+
+    .project-icon {
+      font-size: 1.1rem;
+    }
+
+    .project-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .project-title {
+      font-size: 0.82rem;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+    }
+
+    .project-sub {
+      font-size: 0.68rem;
+      color: rgba(255, 255, 255, 0.4);
+    }
   </style>
 </head>
 
 <body>
+
+  <!-- Floating Project Navigator -->
+  <nav class="project-nav" aria-label="Project switcher">
+    <button class="project-nav-btn" id="projectNavBtn" type="button" aria-expanded="false" aria-haspopup="true">
+      <span>Projects</span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+    <div class="project-menu" id="projectMenu" role="menu">
+      <a href="./" class="project-item active" role="menuitem">
+        <span class="project-icon">🌸</span>
+        <div class="project-info">
+          <span class="project-title">Flowers</span>
+          <span class="project-sub">Stream of consciousness canvas</span>
+        </div>
+      </a>
+      <a href="./art-match/" class="project-item" role="menuitem">
+        <span class="project-icon">🎨</span>
+        <div class="project-info">
+          <span class="project-title">Art Match</span>
+          <span class="project-sub">Photo to artist Twin</span>
+        </div>
+      </a>
+      <a href="./inspiration/" class="project-item" role="menuitem">
+        <span class="project-icon">💡</span>
+        <div class="project-info">
+          <span class="project-title">Inspiration</span>
+          <span class="project-sub">Inspiration capture app</span>
+        </div>
+      </a>
+      <a href="./constellation/" class="project-item" role="menuitem">
+        <span class="project-icon">✦</span>
+        <div class="project-info">
+          <span class="project-title">Constellation</span>
+          <span class="project-sub">Inspiration mapped among paintings</span>
+        </div>
+      </a>
+    </div>
+  </nav>
 
   <!-- Title & Interaction Hint -->
   <header class="header">
@@ -583,6 +717,23 @@
       addThought(data.text);
     });
 
+  </script>
+
+  <script>
+    // Project navigator toggle handler
+    const projectBtn = document.getElementById('projectNavBtn');
+    const projectMenu = document.getElementById('projectMenu');
+    if (projectBtn && projectMenu) {
+      projectBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isOpen = projectMenu.classList.toggle('open');
+        projectBtn.setAttribute('aria-expanded', String(isOpen));
+      });
+      document.addEventListener('click', () => {
+        projectMenu.classList.remove('open');
+        projectBtn.setAttribute('aria-expanded', 'false');
+      });
+    }
   </script>
 </body>
 
