@@ -180,6 +180,9 @@
   .sheet h3 { margin: 14px 0 2px; font-family: var(--serif); font-size: 22px; line-height: 1.2; font-weight: 500; }
   .sheet .meta { color: var(--text-2); font-size: 15px; }
   .sheet .btn { margin-top: 16px; }
+  .sheet .btn + .btn { margin-top: 8px; }
+  .btn.danger { background: transparent; color: var(--accent); }
+  .btn.danger:hover { background: var(--accent-fill); }
   .sheet .close { position: absolute; top: 24px; right: 24px; background: rgba(253,252,246,0.92); }
   .drawer { position: fixed; z-index: 35; top: 0; right: 0; bottom: 0; width: min(380px, 100%); background: var(--surface); box-shadow: var(--shadow-lg);
     padding: max(16px, env(safe-area-inset-top)) 16px 16px; overflow-y: auto; animation: slide .3s var(--ease); }
@@ -226,6 +229,7 @@
   <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/></symbol>
   <symbol id="i-map" viewBox="0 0 24 24"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14M15 6v14"/></symbol>
   <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.6 5.4L19 10l-5.4 1.6L12 17l-1.6-5.4L5 10l5.4-1.6z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></symbol>
   <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></symbol>
 </svg>
 
@@ -359,17 +363,54 @@ function cachedImg(src) {
 const paletteHTML = (pal, cls = "palette") => `<div class="${cls}">${(pal || []).map(c => `<span style="background:${c}" title="${colourName(c)}"></span>`).join("")}</div>`;
 
 // ---------- State & storage ----------
-const S = { me: { id: null, name: "" }, paintings: [], captures: [], active: null, results: null, thinking: false };
+const S = { me: { id: null, name: "" }, paintings: [], captures: [], active: null, results: null, thinking: false, cloud: null };
 const store = {
-  // Prototype: this device only. Swap load/save for Firebase Realtime Database to share the map.
+  // This device keeps your own captures (plus generated samples) as a backup; everyone's captures come from Firebase.
   load() { try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch { return {}; } },
   save() {
-    const captures = S.captures.map(c => ({ id: c.id, kind: c.kind, owner: c.owner, name: c.name, photo: c.photo, palette: c.palette, prompt: c.prompt,
-      imgEmb: round4(c.imgEmb), why: c.why, pills: c.pills, query: c.query, whyEmb: c.whyEmb ? round4(c.whyEmb) : null, notes: c.notes, createdAt: c.createdAt }));
+    const captures = S.captures.filter(c => isMine(c) || c.kind === "generated").map(c => ({ ...toCloud(c), id: c.id, kind: c.kind, prompt: c.prompt, notes: c.notes, cloud: c.cloud }));
     try { localStorage.setItem(LS_KEY, JSON.stringify({ me: S.me, captures })); } catch { toast("Couldn't save — storage may be full."); }
     renderMine();
   },
 };
+// Shape stored in Firebase at constellation/captures/{id}. Pills with no answer are "" (Firebase drops nulls).
+function toCloud(c) {
+  return { owner: c.owner, name: c.name, photo: c.photo, palette: c.palette || [], imgEmb: round4(c.imgEmb), why: c.why || "",
+    pills: Object.fromEntries(Object.entries(c.pills || {}).map(([k, v]) => [k, v || ""])), query: c.query || "",
+    whyEmb: c.whyEmb ? round4(c.whyEmb) : null, createdAt: c.createdAt };
+}
+function cloudSave(c) {
+  if (!S.cloud || !isMine(c)) return;
+  S.cloud.save(c.id, toCloud(c)).then(() => { c.cloud = true; store.save(); })
+    .catch(err => { console.warn("cloud save failed", err); toast("Couldn't save to the shared map — kept on this device"); });
+}
+// Called by the Firebase module once anonymous sign-in succeeds.
+window.onCloud = cloud => {
+  const oldId = S.me.id; S.cloud = cloud; S.me.id = cloud.uid;
+  for (const c of S.captures) if (c.kind === "person" && c.owner === oldId) c.owner = cloud.uid; // adopt captures made before sign-in
+  store.save();
+  cloud.listen(mergeFromCloud, id => removeCapture(id, false));
+  for (const c of S.captures) if (isMine(c) && !c.cloud) cloudSave(c);
+};
+window.onCloudError = err => { console.warn("Firebase unavailable", err); toast("Shared map unavailable — saving on this device", 4500); };
+function mergeFromCloud(id, v) {
+  if (!v || !Array.isArray(v.imgEmb) || v.imgEmb.length < 100) return;
+  const old = S.captures.find(c => c.id === id);
+  if (old && isMine(old)) { old.cloud = true; return; } // this device's copy is the freshest
+  const c = { ...v, id, kind: "person", pills: v.pills || {}, palette: v.palette || [], why: v.why || "", query: v.query || "", whyEmb: v.whyEmb || null,
+    notes: old?.notes || {}, draw: old?.draw, cloud: true };
+  refresh(c);
+  if (old) S.captures[S.captures.indexOf(old)] = c; else S.captures.push(c);
+  if (S.active === old && old) S.active = c;
+  if (v.owner === S.me.id) store.save();
+}
+function removeCapture(id, fromHere = true) {
+  const c = S.captures.find(c => c.id === id); if (!c) return;
+  S.captures = S.captures.filter(x => x !== c);
+  if (S.active === c) { S.active = null; S.results = null; }
+  if (fromHere && S.cloud && c.cloud) S.cloud.remove(id).catch(err => { console.warn(err); toast("Couldn't delete from the shared map"); });
+  store.save();
+}
 const aboutCache = (() => { try { return JSON.parse(localStorage.getItem(ABOUT_KEY)) || {}; } catch { return {}; } })();
 function saveAbout() { try { localStorage.setItem(ABOUT_KEY, JSON.stringify(aboutCache)); } catch {} }
 
@@ -616,7 +657,7 @@ $("flowBody").addEventListener("click", e => {
 $("fileCam").onchange = $("fileUp").onchange = async e => {
   const f = e.target.files[0]; e.target.value = ""; if (!f) return;
   const url = URL.createObjectURL(f);
-  try { const img = await loadImg(url); flow.photo = resizeToDataURL(img, 512); flow.palette = extractPalette(img); }
+  try { const img = await loadImg(url); flow.photo = resizeToDataURL(img, 400, 0.8); flow.palette = extractPalette(img); }
   catch { toast("Couldn't read that image"); return; } finally { URL.revokeObjectURL(url); }
   renderFlow(); embedFlowPhoto();
 };
@@ -625,7 +666,7 @@ async function embedFlowPhoto() {
   try {
     const imgEmb = await embedImage(flow.photo);
     const c = { id: uid(), kind: "person", owner: S.me.id, name: S.me.name, photo: flow.photo, palette: flow.palette, imgEmb, why: "", pills: {}, query: "", whyEmb: null, notes: {}, createdAt: Date.now() };
-    refresh(c); S.captures.push(c); store.save();
+    refresh(c); S.captures.push(c); store.save(); cloudSave(c);
     S.active = c; S.results = nearestFor(c); focusOn(c, [S.results.painting]);
     flow.capture = c; flow.step = "ask"; renderFlow();
   } catch (err) { console.error(err); flow.error = "Couldn't reach the model. Your photo is safe."; renderFlow(); }
@@ -637,7 +678,7 @@ async function explore() {
   S.thinking = true; S.active = c; renderFlow();
   try {
     const whyEmb = query ? (query === c.query && c.whyEmb ? c.whyEmb : await embedText(query)) : null;
-    Object.assign(c, { why, pills, query, whyEmb }); refresh(c); store.save();
+    Object.assign(c, { why, pills, query, whyEmb }); refresh(c); store.save(); cloudSave(c);
     S.thinking = false; flow.step = "explore"; closeFlow(); showResult(c);
   } catch (err) { console.error(err); S.thinking = false; renderFlow(); toast("Couldn't explore — try again"); }
 }
@@ -684,7 +725,7 @@ function showResult(c) {
       </div>
       ${r.person ? `<button class="person-row" data-goto="${r.person.id}"><img src="${esc(r.person.photo)}" alt="">
           <div><div class="k">Nearest person</div><div class="n">${esc(r.person.name)}</div><div class="w">${esc(r.person.why || pillSummary(r.person.pills).join(" · "))}</div></div></button>`
-        : `<div class="person-row empty">No one nearby yet — people appear once the map is shared.</div>`}
+        : `<div class="person-row empty">No one nearby yet.</div>`}
     </div>`;
   $("result").hidden = false; $("result").scrollTop = 0;
   if (!about) writeAbout(r.painting);
@@ -730,7 +771,8 @@ function openSheet(n) {
     h += `<img class="hero" src="${esc(n.photo)}" alt=""><h3>${isMine(n) ? "You" : esc(n.name)}</h3>
       ${chips.length ? `<div class="chips" style="margin-top:8px">${chips.map(t => `<span class="chip sm" aria-pressed="true">${esc(t)}</span>`).join("")}</div>` : ""}
       ${n.why ? `<p class="quote">“${esc(n.why)}”</p>` : ""}
-      ${isMine(n) ? `<button class="btn primary block" data-action="explore-capture" data-id="${n.id}">Let’s explore ${icon("arrow")}</button>` : ""}`;
+      ${isMine(n) ? `<button class="btn primary block" data-action="explore-capture" data-id="${n.id}">Let’s explore ${icon("arrow")}</button>
+        <button class="btn block danger" data-action="delete-capture" data-id="${n.id}">${icon("trash")}Delete</button>` : ""}`;
   }
   s.innerHTML = h; s.hidden = false; focusOn(n, [], true);
 }
@@ -739,6 +781,10 @@ $("sheet").addEventListener("click", e => {
   const a = e.target.closest("[data-action]"); if (!a) return;
   if (a.dataset.action === "close-sheet") closeSheet();
   if (a.dataset.action === "explore-capture") { const c = S.captures.find(c => c.id === a.dataset.id); closeSheet(); exploreExisting(c); }
+  if (a.dataset.action === "delete-capture") {
+    if (a.dataset.confirm !== "1") { a.dataset.confirm = "1"; a.innerHTML = `${icon("trash")}Tap again to delete`; return; } // two taps, no browser dialog
+    removeCapture(a.dataset.id); closeSheet(); toast("Deleted");
+  }
 });
 function exploreExisting(c) { // straight to the result if they've answered before, otherwise ask first
   if (c.query) { flow.capture = c; flow.step = "explore"; showResult(c); } else openFlow("ask", c);
@@ -794,10 +840,42 @@ addEventListener("resize", resize);
   resize(); layoutPaintings();
   const saved = store.load();
   S.me = saved.me && saved.me.id ? saved.me : { id: "u_" + uid(), name: "" };
-  for (const c of saved.captures || []) { refresh(c); S.captures.push(c); }
+  for (const c of saved.captures || []) { c.pills = c.pills || {}; refresh(c); S.captures.push(c); }
   store.save();
   requestAnimationFrame(frame);
 })();
+</script>
+<script type="module">
+  // Shared map: anonymous sign-in + Realtime Database at constellation/captures
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+  import { getDatabase, ref, set, remove, onChildAdded, onChildChanged, onChildRemoved } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+  const firebaseConfig = {
+      apiKey: "AIzaSyBp4VZMMi4KXts_ZqGLs9JkZSmfAnV78b4",
+      authDomain: "sharedminds26-809c7.firebaseapp.com",
+      databaseURL: "https://sharedminds26-809c7-default-rtdb.firebaseio.com",
+      projectId: "sharedminds26-809c7",
+      storageBucket: "sharedminds26-809c7.firebasestorage.app",
+      messagingSenderId: "102824611711",
+      appId: "1:102824611711:web:df6236df840b70c925d44a"
+    };
+  const app = initializeApp(firebaseConfig), auth = getAuth(app), db = getDatabase(app);
+  const capturesRef = ref(db, "constellation/captures");
+  let started = false;
+  onAuthStateChanged(auth, user => {
+    if (!user || started) return; started = true;
+    window.onCloud({
+      uid: user.uid,
+      save: (id, data) => set(ref(db, `constellation/captures/${id}`), data),
+      remove: id => remove(ref(db, `constellation/captures/${id}`)),
+      listen: (upsert, drop) => {
+        onChildAdded(capturesRef, s => upsert(s.key, s.val()), window.onCloudError);
+        onChildChanged(capturesRef, s => upsert(s.key, s.val()));
+        onChildRemoved(capturesRef, s => drop(s.key));
+      },
+    });
+  });
+  signInAnonymously(auth).catch(err => window.onCloudError(err));
 </script>
 </body>
 </html>
