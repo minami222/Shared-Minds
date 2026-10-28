@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sculpture Test</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0b0a09; overflow: hidden; }
+  </style>
+  <!-- Maps 'three' to the CDN so add-ons (GLTFLoader, OrbitControls) can find it -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.165.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.165.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <script type="module" src="sculpture-test.js"></script>
+</body>
+</html>
