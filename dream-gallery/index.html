@@ -43,44 +43,31 @@
         <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="7" r="2"/><circle cx="19" cy="7" r="2"/><circle cx="6" cy="17" r="2"/><circle cx="18" cy="17" r="2"/><path d="M5 9l5 2m4 0l5-2m-3 8l-4-3m-6 3l4-3"/></svg>
         <span>Dream Web</span>
       </button>
-      <button id="newDreamBtn" class="pill-btn accent" title="Enter a New Dream">
-        <svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-        <span>New Dream</span>
-      </button>
     </div>
   </header>
 
   <!-- Interactive 3D Door Portals (Mapped to the base/threshold of each archway) -->
   <div id="door-left" class="door-portal" data-door="left">
     <div class="door-threshold-pill">
-      <span class="door-name">Left Door</span>
       <span class="door-prompt" id="leftDoorQuestion">Where did this take place?</span>
-      <span class="door-walk">Walk through &rarr;</span>
     </div>
   </div>
 
   <div id="door-right" class="door-portal" data-door="right">
     <div class="door-threshold-pill">
-      <span class="door-name">Right Door</span>
       <span class="door-prompt" id="rightDoorQuestion">What did you feel inside?</span>
-      <span class="door-walk">Walk through &rarr;</span>
     </div>
   </div>
 
-  <!-- Museum Label (Anchored to the main painting) -->
-  <div id="museum-label" class="museum-label">
-    <div class="label-header">
-      <span class="label-style" id="labelStyle">Impressionist Memory</span>
-      <span class="label-date" id="labelDate">Room I · Initial Fragment</span>
-    </div>
-    <blockquote class="label-quote" id="labelQuote">
-      “I was standing on an endless shore of blue glass, watching quiet waves that never broke...”
-    </blockquote>
-    <div class="label-meta">
-      <span class="label-author" id="labelAuthor">Dreamer #1</span>
-      <span class="label-dot">·</span>
-      <span class="label-connections" id="labelConnections">2 paths forward</span>
-    </div>
+  <!-- Cinema cut: brief fade to dark when a new version arrives -->
+  <div id="cut" class="cut-overlay"></div>
+
+  <!-- Start a dream (bottom centre) -->
+  <div class="dream-start">
+    <button id="newDreamBtn" class="pill-btn accent" title="Start a new dream">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+      <span>New Dream</span>
+    </button>
   </div>
 
   <!-- Camera Navigation Hint -->
@@ -123,9 +110,9 @@
       </div>
 
       <div class="modal-footer">
-        <button id="cancelModalBtn" class="btn-ghost">Cancel</button>
+        <button id="cancelModalBtn" class="btn-ghost">Ask another</button>
         <button id="submitDreamBtn" class="btn-primary">
-          <span>Paint this Room</span>
+          <span id="submitLabel">Next</span>
           <svg class="icon" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
         </button>
       </div>

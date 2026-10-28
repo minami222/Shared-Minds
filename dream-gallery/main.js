@@ -1,4 +1,5 @@
 import * as THREE from 'https://unpkg.com/three@0.165.0/build/three.module.js';
+import { QUESTIONS, pickQuestion } from './questions.js';
 
 // --- Room & Navigation State ---
 export const state = {
@@ -12,8 +13,8 @@ export const state = {
       author: 'Dreamer #1',
       style: 'Impressionist Memory',
       styleCategory: 'mixed', // factual (realist), mixed (impressionist), emotional (abstract)
-      leftQuestion: 'Who was standing beside you on the shore?',
-      rightQuestion: 'Did the infinite horizon feel peaceful or lonely?',
+      leftQuestion: 'Scene',
+      rightQuestion: 'Feeling',
       paintingUrl: null, // Procedurally drawn initially
       connections: 2
     }
@@ -22,18 +23,15 @@ export const state = {
   targetAngle: { x: 0, y: 0 },
   isDragging: false,
   previousMousePosition: { x: 0, y: 0 },
-  isTransitioning: false
+  isTransitioning: false,
+  doorsVisible: false,
+  dollyTarget: 0.1 // camera z: 0.1 = room view, PUSH_Z = close to the frame
 };
 
 // --- DOM References ---
 const container = document.getElementById('canvas-container');
 const roomBadge = document.getElementById('roomBadge');
 const roomSubtitle = document.getElementById('roomSubtitle');
-const labelStyle = document.getElementById('labelStyle');
-const labelDate = document.getElementById('labelDate');
-const labelQuote = document.getElementById('labelQuote');
-const labelAuthor = document.getElementById('labelAuthor');
-const labelConnections = document.getElementById('labelConnections');
 
 const doorLeft = document.getElementById('door-left');
 const doorRight = document.getElementById('door-right');
@@ -172,18 +170,20 @@ function initGalleryScene() {
       // 2. Central Wall Painting Mesh
       // Curved along the central wall to fit seamlessly inside the center gilded frame
       const pRadius = 4.96;
-      const pHeight = 0.745;
-      const pArc = 0.496; // Center frame width in image
+      const pHeight = 0.547;
+      const pArc = 0.447; // Center frame inner width in image
       const pGeometry = new THREE.CylinderGeometry(pRadius, pRadius, pHeight, 32, 1, true, -pArc / 2, pArc);
 
       paintingTexture = createInitialDreamTexture();
       const pMaterial = new THREE.MeshBasicMaterial({
         map: paintingTexture,
-        side: THREE.FrontSide
+        side: THREE.BackSide // Seen from inside the cylinder, like the room
       });
 
       paintingMesh = new THREE.Mesh(pGeometry, pMaterial);
-      paintingMesh.position.set(0, 0.30, 0); // Aligns precisely with central gilded frame
+      paintingMesh.position.set(0, 0.103, 0); // Aligns precisely with central gilded frame
+      paintingMesh.rotation.y = Math.PI; // Same direction as the room
+      paintingMesh.visible = false; // Empty frame until the first painting
       scene.add(paintingMesh);
 
       updateRoomUI(state.rooms[0]);
@@ -198,6 +198,7 @@ function initGalleryScene() {
 // --- Project 3D Anchors to Screen Space ---
 const tempVec = new THREE.Vector3();
 function updateDoorPortals() {
+  if (!state.doorsVisible) return;
   const widthHalf = window.innerWidth / 2;
   const heightHalf = window.innerHeight / 2;
 
@@ -232,11 +233,6 @@ function updateDoorPortals() {
 export function updateRoomUI(room) {
   roomBadge.textContent = `Room ${room.id.replace('room-', '')}`;
   roomSubtitle.textContent = room.subtitle;
-  labelStyle.textContent = room.style;
-  labelDate.textContent = `${room.title} · Dream Fragment`;
-  labelQuote.textContent = `“${room.fragment}”`;
-  labelAuthor.textContent = room.author;
-  labelConnections.textContent = `${room.connections} paths forward`;
 
   leftDoorQuestion.textContent = room.leftQuestion;
   rightDoorQuestion.textContent = room.rightQuestion;
@@ -248,12 +244,13 @@ function setupControls() {
   const maxPanY = 0.15; // Maximum up/down tilt in radians (~8 deg)
 
   window.addEventListener('mousedown', (e) => {
-    if (e.target.closest('.gallery-header') || e.target.closest('.door-portal') || e.target.closest('.museum-label') || e.target.closest('.modal-scrim')) return;
+    if (e.target.closest('.gallery-header') || e.target.closest('.door-portal') || e.target.closest('.dream-start') || e.target.closest('.modal-scrim')) return;
     state.isDragging = true;
     state.previousMousePosition = { x: e.clientX, y: e.clientY };
   });
 
   window.addEventListener('mousemove', (e) => {
+    if (state.isTransitioning) return; // Camera is busy with the cinema cut
     if (state.isDragging) {
       const deltaX = e.clientX - state.previousMousePosition.x;
       const deltaY = e.clientY - state.previousMousePosition.y;
@@ -309,61 +306,227 @@ function setupControls() {
   });
 }
 
-// --- Modal & Door Event Handlers ---
-let activeDoorChoice = null; // 'left' | 'right' | null
+// --- Painting (class Replicate proxy, same as Constellation) ---
+const PROXY = 'https://itp-ima-replicate-proxy.web.app/api/create_n_get';
+const BASE_STYLE = 'oil painting on canvas in the style of Claude Monet, impressionist, visible thick brushstrokes, soft dappled light, no text';
 
-function openDreamModal(doorType = null) {
-  activeDoorChoice = doorType;
-  dreamModal.hidden = false;
-  dreamInput.value = '';
-  charCount.textContent = '0';
+// How each step changes the previous painting (editing model keeps what came before)
+const EDIT_PROMPTS = {
+  scene: (a) => `Add this remembered detail to the painting: ${a}. Keep the composition and Monet impressionist brushwork, slightly more detailed and realistic.`,
+  feeling: (a) => `Change the mood of this painting to express: ${a}. Keep the scene, looser expressive brushwork, colours that carry the feeling, Monet style.`,
+  element: (a) => `Make this painting more abstract, expressing: ${a}. Keep its colours, dissolve the forms into loose impressionist brushstrokes and shapes.`
+};
+let lastPaintingUrl = null;
 
-  if (doorType === 'left') {
-    modalKicker.textContent = 'Left Door · Walk Through';
-    modalTitle.textContent = state.rooms[state.currentRoomIndex].leftQuestion;
-    modalDesc.textContent = 'Answer this fragment to step through into the adjoining chamber.';
-    styleIndicator.querySelector('.text').textContent = 'Projected Painting: Realist Study';
-    styleIndicator.querySelector('.dot').style.background = '#6ee7b7';
-    dreamInput.placeholder = 'e.g. It was an autumn afternoon in an old observatory; iron gears were ticking softly...';
-  } else if (doorType === 'right') {
-    modalKicker.textContent = 'Right Door · Walk Through';
-    modalTitle.textContent = state.rooms[state.currentRoomIndex].rightQuestion;
-    modalDesc.textContent = 'Answer this feeling to step through into the adjoining chamber.';
-    styleIndicator.querySelector('.text').textContent = 'Projected Painting: Abstract Echo';
-    styleIndicator.querySelector('.dot').style.background = '#f472b6';
-    dreamInput.placeholder = 'e.g. A heavy ache of longing, yet underneath was an electric rush of sudden wonder...';
-  } else {
-    modalKicker.textContent = 'A New Chamber';
-    modalTitle.textContent = 'Describe your dream fragment';
-    modalDesc.textContent = 'Every fragment creates a panoramic painting inside the gallery rotunda.';
-    styleIndicator.querySelector('.text').textContent = 'Projected Painting: Impressionist Memory';
-    styleIndicator.querySelector('.dot').style.background = '#c6a052';
-    dreamInput.placeholder = 'e.g. A city underwater where clocks float like golden jellyfish...';
+// --- Cinema Cut: push in while painting, cut to dark, reveal, ease back ---
+const PUSH_Z = -2.2;
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const cutOverlay = document.getElementById('cut');
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function pushIn() {
+  state.isTransitioning = true;
+  state.targetAngle.x = 0;
+  state.targetAngle.y = 0;
+  if (!reduceMotion) state.dollyTarget = PUSH_Z;
+}
+
+function pullBack() {
+  state.dollyTarget = 0.1;
+  state.isTransitioning = false;
+}
+
+function setHaze(on) {
+  cutOverlay.classList.toggle('is-on', on);
+}
+const hintBar = document.getElementById('hintBar');
+
+async function replicate(body) {
+  const r = await fetch(PROXY, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.error || j.output == null) throw new Error(j.details || j.error || `Proxy error ${r.status}`);
+  return j.output;
+}
+
+async function generateImage(prompt) {
+  const out = await replicate({ model: 'black-forest-labs/flux-schnell', input: { prompt, aspect_ratio: '21:9', output_format: 'jpg', num_outputs: 1 } });
+  return Array.isArray(out) ? out[0] : out;
+}
+
+function setStatus(text, loading = false) {
+  hintBar.querySelector('span').textContent = text;
+  hintBar.classList.toggle('is-loading', loading);
+}
+
+// Show an image in the centre frame, cropped to fill it (like CSS object-fit: cover)
+function showPainting(url) {
+  return new Promise((resolve, reject) => {
+    // Load through the local server (server.py) so WebGL is allowed to use it
+    new THREE.TextureLoader().load(`/img?url=${encodeURIComponent(url)}`, (texture) => {
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const frameAspect = (4.96 * 0.447) / 0.547; // arc length / height of the centre frame
+      const imageAspect = texture.image.width / texture.image.height;
+      if (imageAspect > frameAspect) {
+        texture.repeat.set(frameAspect / imageAspect, 1);
+      } else {
+        texture.repeat.set(1, imageAspect / frameAspect);
+      }
+      texture.offset.set((1 - texture.repeat.x) / 2, (1 - texture.repeat.y) / 2);
+      // Inside a cylinder images read mirrored, so flip horizontally
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.offset.x += texture.repeat.x;
+      texture.repeat.x *= -1;
+      paintingMesh.material.map = texture;
+      paintingMesh.material.needsUpdate = true;
+      paintingMesh.visible = true;
+      resolve();
+    }, undefined, reject);
+  });
+}
+
+// Edit the previous painting instead of starting over, so the dream evolves
+async function editImage(prompt, imageUrl) {
+  const out = await replicate({ model: 'black-forest-labs/flux-kontext-pro', input: { prompt, input_image: imageUrl, aspect_ratio: 'match_input_image', output_format: 'jpg' } });
+  return Array.isArray(out) ? out[0] : out;
+}
+
+// type: 'opening' makes the first painting; other types edit the last one
+async function paintVersion(type, answer, step) {
+  setStatus('Imagining your dream', true);
+  pushIn();
+  setHaze(true); // Dream haze while it paints
+  try {
+    const url = type === 'opening'
+      ? await generateImage(`${answer}, ${BASE_STYLE}`)
+      : await editImage(EDIT_PROMPTS[step === 3 ? 'element' : type](answer), lastPaintingUrl);
+    await showPainting(url);
+    lastPaintingUrl = url;
+    setStatus('');
+    setHaze(false); // Haze clears to reveal the new version
+    await wait(800);
+    await wait(1500); // Hold close on the new version before easing back
+    pullBack();
+    return true;
+  } catch (err) {
+    pullBack();
+    setHaze(false);
+    console.error('Painting failed:', err);
+    setStatus('The painting didn\'t come through. Try again.');
+    return false;
   }
+}
 
+// --- Question Flow (3 steps, one painting version per step) ---
+// Step 1: opening → version 1. Steps 2 and 3: doors (scene/feeling) → version 2, then final (more abstract).
+const flow = {
+  step: 1,
+  type: null,       // current question bank: 'opening' | 'gap' | 'scene' | 'feeling' | 'element'
+  current: null,    // current { q, hint }
+  answers: []       // { step, type, q, answer }
+};
+
+function askQuestion(type) {
+  flow.type = type;
+  flow.current = pickQuestion(type);
+  renderQuestion();
+  dreamModal.hidden = false;
   setTimeout(() => dreamInput.focus(), 150);
+}
+
+function renderQuestion() {
+  modalTitle.textContent = flow.current.q;
+  dreamInput.value = '';
+  dreamInput.placeholder = flow.current.hint;
+  charCount.textContent = '0';
+  // Opening has only one question, so nothing to swap
+  cancelModalBtn.style.display = QUESTIONS[flow.type].length < 2 ? 'none' : '';
 }
 
 function closeDreamModal() {
   dreamModal.hidden = true;
 }
 
-doorLeft.addEventListener('click', () => openDreamModal('left'));
-doorRight.addEventListener('click', () => openDreamModal('right'));
-newDreamBtn.addEventListener('click', () => openDreamModal(null));
+// Doors only appear at step 2
+function setDoorsVisible(visible) {
+  state.doorsVisible = visible;
+  if (!visible) {
+    doorLeft.style.display = 'none';
+    doorRight.style.display = 'none';
+  }
+}
+
+// Each door shows its own question; clicking opens that same question
+const doorQuestions = { scene: null, feeling: null };
+
+function setDoorQuestions() {
+  doorQuestions.scene = pickQuestion('scene', doorQuestions.scene);
+  doorQuestions.feeling = pickQuestion('feeling', doorQuestions.feeling);
+  leftDoorQuestion.textContent = doorQuestions.scene.q;
+  rightDoorQuestion.textContent = doorQuestions.feeling.q;
+}
+
+function openDoor(type) {
+  flow.type = type;
+  flow.current = doorQuestions[type];
+  renderQuestion();
+  dreamModal.hidden = false;
+  setTimeout(() => dreamInput.focus(), 150);
+}
+
+doorLeft.addEventListener('click', () => openDoor('scene'));
+doorRight.addEventListener('click', () => openDoor('feeling'));
+newDreamBtn.addEventListener('click', () => {
+  flow.step = 1;
+  flow.answers = [];
+  lastPaintingUrl = null;
+  doorQuestions.scene = doorQuestions.feeling = null;
+  newDreamBtn.style.display = 'none';
+  setDoorsVisible(false);
+  askQuestion('opening');
+});
 closeModalBtn.addEventListener('click', closeDreamModal);
-cancelModalBtn.addEventListener('click', closeDreamModal);
+
+// "Ask another": swap for a different question of the same type
+cancelModalBtn.addEventListener('click', () => {
+  flow.current = pickQuestion(flow.type, flow.current);
+  renderQuestion();
+  dreamInput.focus();
+});
 
 dreamInput.addEventListener('input', () => {
   charCount.textContent = dreamInput.value.length;
 });
 
-submitDreamBtn.addEventListener('click', () => {
+submitDreamBtn.addEventListener('click', async () => {
   const text = dreamInput.value.trim();
   if (!text) return;
-  // Step 2 will wire this directly to Replicate AI painting generation!
-  alert(`Fragment captured for Step 2:\n"${text}"\nStyle: ${activeDoorChoice || 'impressionist'}`);
+  flow.answers.push({ step: flow.step, type: flow.type, q: flow.current.q, answer: text });
+  console.log('[Dream] answers so far:', flow.answers);
+
   closeDreamModal();
+  setDoorsVisible(false);
+
+  // Wait for this version to appear before moving on; on failure, re-ask the same step
+  const painted = await paintVersion(flow.type, text, flow.step);
+  if (!painted) {
+    flow.answers.pop();
+    if (flow.step === 1) askQuestion(flow.type);
+    else setDoorsVisible(true);
+    return;
+  }
+
+  if (flow.step === 1) {
+    flow.step = 2;
+    setDoorQuestions();
+    setDoorsVisible(true);
+  } else if (flow.step === 2) {
+    flow.step = 3;
+    setDoorQuestions();
+    setDoorsVisible(true);
+  } else {
+    flow.step = 'done';
+    newDreamBtn.style.display = '';
+  }
 });
 
 // --- Render Loop ---
@@ -376,6 +539,9 @@ function animate() {
 
   camera.rotation.x = state.cameraAngle.x;
   camera.rotation.y = state.cameraAngle.y;
+
+  // Slow dolly towards / away from the frame
+  camera.position.z += (state.dollyTarget - camera.position.z) * 0.02;
 
   // Keep door hotspots aligned to rotunda doorways
   updateDoorPortals();
@@ -393,6 +559,11 @@ window.addEventListener('resize', () => {
 });
 
 // --- Boot ---
+setDoorsVisible(false);
+modalDesc.style.display = 'none';
+modalKicker.style.display = 'none';
+setStatus('');
+styleIndicator.style.display = 'none';
 initGalleryScene();
 setupControls();
 animate();
