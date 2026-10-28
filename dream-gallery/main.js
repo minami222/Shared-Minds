@@ -1,4 +1,5 @@
-import * as THREE from 'https://unpkg.com/three@0.165.0/build/three.module.js';
+import * as THREE from 'three';
+import { CSS3DRenderer, CSS3DObject } from 'three/addons/renderers/CSS3DRenderer.js';
 import { QUESTIONS, pickQuestion } from './questions.js';
 import { saveDream } from './firebase.js';
 
@@ -61,6 +62,27 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 container.appendChild(renderer.domElement);
+
+// CSS3D layer: shows the painting as a normal <img> placed in 3D.
+// A WebGL texture would need the image host to allow CORS; a plain <img> doesn't, so this works online too.
+const cssRenderer = new CSS3DRenderer();
+cssRenderer.setSize(window.innerWidth, window.innerHeight);
+Object.assign(cssRenderer.domElement.style, { position: 'absolute', top: '0', left: '0', pointerEvents: 'none' });
+container.appendChild(cssRenderer.domElement);
+
+const FRAME_PX_W = 1100; // Image size in CSS pixels, scaled down to fit the frame
+const FRAME_WORLD_W = 2 * 4.96 * Math.sin(0.447 / 2) * 1.05; // Width of the centre frame in 3D units (tuned by eye)
+const paintingImg = document.createElement('img');
+Object.assign(paintingImg.style, {
+  width: `${FRAME_PX_W}px`,
+  height: `${Math.round(FRAME_PX_W * 0.547 * 1.08 / FRAME_WORLD_W)}px`,
+  objectFit: 'cover',
+  opacity: '0'
+});
+const paintingObject = new CSS3DObject(paintingImg);
+paintingObject.position.set(0, 0.103, -4.96); // Centre frame, straight ahead
+paintingObject.scale.setScalar(FRAME_WORLD_W / FRAME_PX_W);
+scene.add(paintingObject); // Invisible (opacity 0) until the first painting
 
 // --- 3D Scene Elements ---
 let panoramaMesh = null;
@@ -388,26 +410,12 @@ function setStatus(text, loading = false) {
 // Show an image in the centre frame, cropped to fill it (like CSS object-fit: cover)
 function showPainting(url) {
   return new Promise((resolve, reject) => {
-    // Load through the local server (server.py) so WebGL is allowed to use it
-    new THREE.TextureLoader().load(`/img?url=${encodeURIComponent(url)}`, (texture) => {
-      texture.colorSpace = THREE.SRGBColorSpace;
-      const frameAspect = (4.96 * 0.447) / 0.547; // arc length / height of the centre frame
-      const imageAspect = texture.image.width / texture.image.height;
-      if (imageAspect > frameAspect) {
-        texture.repeat.set(frameAspect / imageAspect, 1);
-      } else {
-        texture.repeat.set(1, imageAspect / frameAspect);
-      }
-      texture.offset.set((1 - texture.repeat.x) / 2, (1 - texture.repeat.y) / 2);
-      // Inside a cylinder images read mirrored, so flip horizontally
-      texture.wrapS = THREE.RepeatWrapping;
-      texture.offset.x += texture.repeat.x;
-      texture.repeat.x *= -1;
-      paintingMesh.material.map = texture;
-      paintingMesh.material.needsUpdate = true;
-      paintingMesh.visible = true;
+    paintingImg.onload = () => {
+      paintingImg.style.opacity = '1';
       resolve();
-    }, undefined, reject);
+    };
+    paintingImg.onerror = reject;
+    paintingImg.src = url;
   });
 }
 
@@ -648,6 +656,7 @@ function animate() {
   updateDoorPortals();
 
   renderer.render(scene, camera);
+  cssRenderer.render(scene, camera);
 }
 
 // --- Window Resize ---
@@ -655,6 +664,7 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  cssRenderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   updateDoorPortals();
 });

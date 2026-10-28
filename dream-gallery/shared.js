@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { CSS3DRenderer, CSS3DObject } from 'three/addons/renderers/CSS3DRenderer.js';
 import { loadDreams } from './firebase.js';
 
 // Shared room: everyone's picked painting floats in a ring around you.
@@ -26,9 +27,15 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.getElementById('shared-canvas').appendChild(renderer.domElement);
 
+// Paintings are plain <img> elements placed in 3D (CSS3D), so they load online without CORS
+const cssRenderer = new CSS3DRenderer();
+cssRenderer.setSize(window.innerWidth, window.innerHeight);
+Object.assign(cssRenderer.domElement.style, { position: 'absolute', top: '0', left: '0' });
+document.getElementById('shared-canvas').appendChild(cssRenderer.domElement);
+const PX_W = 520; // Image width in CSS pixels, scaled to PAINTING_W
+
 const view = { yaw: 0, targetYaw: 0, fov: 60, targetFov: 60 };
-const clickable = []; // meshes, each with userData.dream
-const loader = new THREE.TextureLoader();
+const paintings = []; // CSS3D objects, each with userData.dream
 
 // Temporary sample dreams so the room isn't empty (remove once real dreams exist)
 const SAMPLE_DREAMS = [
@@ -37,27 +44,30 @@ const SAMPLE_DREAMS = [
   { id: 'sample-3', versions: ['assets/dancing.png'], picked: 0, answers: [{ q: '', answer: 'Figures dance hand in hand under bright pink trees, in bold, flat colour.' }] }
 ];
 
-// Generated paintings go through the local server (server.py); local files load directly
-const viaServer = (url) => url.startsWith('http') ? `/img?url=${encodeURIComponent(url)}` : url;
-
 function addPainting(dream, angle) {
   const url = dream.versions?.[dream.picked ?? dream.versions.length - 1];
   if (!url) return;
-  loader.load(viaServer(url), (texture) => {
-    texture.colorSpace = THREE.SRGBColorSpace;
-    const mesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(PAINTING_W, PAINTING_H),
-      new THREE.MeshBasicMaterial({ map: texture })
-    );
-    // Place on the ring, facing the centre
-    mesh.position.set(Math.sin(angle) * RING_RADIUS, 0, -Math.cos(angle) * RING_RADIUS);
-    mesh.lookAt(0, 0, 0);
-    mesh.userData = { dream, angle };
-    scene.add(mesh);
-    clickable.push(mesh);
-  }, undefined, () => {
-    // Replicate links expire after about an hour; skip those quietly
+  const img = document.createElement('img');
+  Object.assign(img.style, {
+    width: `${PX_W}px`,
+    height: `${Math.round(PX_W * PAINTING_H / PAINTING_W)}px`,
+    objectFit: 'cover',
+    cursor: 'pointer',
+    boxShadow: '0 20px 50px rgba(0, 0, 0, 0.12)'
   });
+  img.alt = 'A dream painting';
+  const obj = new CSS3DObject(img);
+  // Place on the ring, facing the centre
+  obj.position.set(Math.sin(angle) * RING_RADIUS, 0, -Math.cos(angle) * RING_RADIUS);
+  obj.lookAt(0, 0, 0);
+  obj.scale.setScalar(PAINTING_W / PX_W);
+  obj.userData = { dream, angle };
+  img.addEventListener('click', () => { if (moved < 5) openDream(obj); });
+  // Replicate links expire after about an hour; drop those quietly
+  img.onerror = () => { scene.remove(obj); paintings.splice(paintings.indexOf(obj), 1); };
+  img.src = url;
+  scene.add(obj);
+  paintings.push(obj);
 }
 
 async function init() {
@@ -116,7 +126,8 @@ let dragging = false;
 let moved = 0;
 let lastX = 0;
 
-renderer.domElement.addEventListener('pointerdown', (e) => {
+window.addEventListener('pointerdown', (e) => {
+  if (e.target.closest('.dream-detail, .shared-top, .return-link')) return;
   dragging = true;
   moved = 0;
   lastX = e.clientX;
@@ -130,16 +141,12 @@ window.addEventListener('pointermove', (e) => {
 });
 window.addEventListener('pointerup', (e) => {
   dragging = false;
-  if (moved < 5 && e.target === renderer.domElement) pickAt(e.clientX, e.clientY);
+  // Tap on empty space closes the card
+  if (moved < 5 && e.target.tagName !== 'IMG' && !e.target.closest('.dream-detail, .shared-top, .return-link')) closeDetail();
 });
 
-const raycaster = new THREE.Raycaster();
-function pickAt(x, y) {
-  const mouse = new THREE.Vector2((x / window.innerWidth) * 2 - 1, -(y / window.innerHeight) * 2 + 1);
-  raycaster.setFromCamera(mouse, camera);
-  const hit = raycaster.intersectObjects(clickable, false)[0];
-  if (!hit) return closeDetail();
-  const { dream, angle } = hit.object.userData;
+function openDream(obj) {
+  const { dream, angle } = obj.userData;
   view.targetYaw = -angle; // Turn to face it
   view.targetFov = 32;     // Step closer
   showDetail(dream);
@@ -154,14 +161,16 @@ function animate() {
   camera.updateProjectionMatrix();
   // Gentle float, like the paintings are drifting
   const t = performance.now() * 0.0005;
-  clickable.forEach((m, i) => { m.position.y = Math.sin(t + i) * 0.08; });
+  paintings.forEach((m, i) => { m.position.y = Math.sin(t + i) * 0.08; });
   renderer.render(scene, camera);
+  cssRenderer.render(scene, camera);
 }
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  cssRenderer.setSize(window.innerWidth, window.innerHeight);
 });
 
 init();
