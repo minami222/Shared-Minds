@@ -1,5 +1,6 @@
 import * as THREE from 'https://unpkg.com/three@0.165.0/build/three.module.js';
 import { QUESTIONS, pickQuestion } from './questions.js';
+import { saveDream } from './firebase.js';
 
 // --- Room & Navigation State ---
 export const state = {
@@ -231,8 +232,7 @@ function updateDoorPortals() {
 
 // --- UI Updates ---
 export function updateRoomUI(room) {
-  roomBadge.textContent = `Room ${room.id.replace('room-', '')}`;
-  roomSubtitle.textContent = room.subtitle;
+  setRoom(0);
 
   leftDoorQuestion.textContent = room.leftQuestion;
   rightDoorQuestion.textContent = room.rightQuestion;
@@ -318,6 +318,33 @@ const EDIT_PROMPTS = {
 };
 let lastPaintingUrl = null;
 
+// --- Rooms: each step feels like a new room (swap happens inside the haze) ---
+// To change the side paintings per room, point `image` at a new background
+const ROOMS = [
+  { name: 'Room 1', subtitle: 'The Threshold of Awakening', image: 'assets/room-monet.jpg' },
+  { name: 'Room 2', subtitle: 'The Room of Reflection', image: 'assets/room-renoir.jpg' },
+  { name: 'Room 3', subtitle: 'The Room of Dissolving', image: 'assets/room-cassatt.jpg' }
+];
+let currentRoomImage = ROOMS[0].image;
+
+function setRoom(index) {
+  const room = ROOMS[index];
+  roomBadge.textContent = room.name;
+  roomSubtitle.textContent = room.subtitle;
+  if (room.image === currentRoomImage || !panoramaMesh) return Promise.resolve();
+  currentRoomImage = room.image;
+  return new Promise((resolve) => {
+    new THREE.TextureLoader().load(room.image, (texture) => {
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.minFilter = THREE.LinearFilter;
+      texture.generateMipmaps = false;
+      panoramaMesh.material.map = texture;
+      panoramaMesh.material.needsUpdate = true;
+      resolve();
+    }, undefined, () => resolve());
+  });
+}
+
 // --- Cinema Cut: push in while painting, cut to dark, reveal, ease back ---
 const PUSH_Z = -2.2;
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -399,8 +426,9 @@ async function paintVersion(type, answer, step) {
     const url = type === 'opening'
       ? await generateImage(`${answer}, ${BASE_STYLE}`)
       : await editImage(EDIT_PROMPTS[step === 3 ? 'element' : type](answer), lastPaintingUrl);
-    await showPainting(url);
+    await Promise.all([showPainting(url), setRoom(step - 1)]);
     lastPaintingUrl = url;
+    flow.versions.push(url);
     setStatus('');
     setHaze(false); // Haze clears to reveal the new version
     await wait(800);
@@ -422,7 +450,8 @@ const flow = {
   step: 1,
   type: null,       // current question bank: 'opening' | 'gap' | 'scene' | 'feeling' | 'element'
   current: null,    // current { q, hint }
-  answers: []       // { step, type, q, answer }
+  answers: [],      // { step, type, q, answer }
+  versions: []      // painting url per step
 };
 
 function askQuestion(type) {
@@ -475,9 +504,81 @@ function openDoor(type) {
 
 doorLeft.addEventListener('click', () => openDoor('scene'));
 doorRight.addEventListener('click', () => openDoor('feeling'));
+
+// --- Ending: pick a version, save it, then the door to other dreams glows ---
+const picker = document.getElementById('picker');
+const pickerDots = document.getElementById('pickerDots');
+const pickBtn = document.getElementById('pickBtn');
+let pickedIndex = 2;
+let savedDreamId = null;
+
+function showPicker() {
+  pickedIndex = flow.versions.length - 1; // Final version selected by default
+  pickerDots.innerHTML = '';
+  flow.versions.forEach((url, i) => {
+    const dot = document.createElement('button');
+    dot.setAttribute('aria-label', `Version ${i + 1}`);
+    dot.addEventListener('click', () => previewVersion(i));
+    pickerDots.appendChild(dot);
+  });
+  updateDots();
+  picker.style.display = '';
+}
+
+function updateDots() {
+  [...pickerDots.children].forEach((dot, i) => dot.classList.toggle('is-active', i === pickedIndex));
+}
+
+async function previewVersion(i) {
+  if (i === pickedIndex) return;
+  pickedIndex = i;
+  updateDots();
+  setHaze(true);
+  await wait(500);
+  await Promise.all([showPainting(flow.versions[i]), setRoom(i)]);
+  setHaze(false);
+}
+
+pickBtn.addEventListener('click', async () => {
+  picker.style.display = 'none';
+  setStatus('Keeping your dream', true);
+  try {
+    savedDreamId = await saveDream({
+      versions: flow.versions,
+      answers: flow.answers,
+      picked: pickedIndex,
+      createdAt: Date.now()
+    });
+  } catch (err) {
+    console.error('Saving failed:', err); // Still let them explore
+  }
+  setStatus('');
+  flow.step = 'explore';
+  explorePrompt.style.display = '';
+});
+
+const explorePrompt = document.getElementById('explorePrompt');
+
+// Dream Web button: visit the Room of Many Dreams any time
+document.getElementById('dreamMapBtn').addEventListener('click', exploreOthers);
+document.getElementById('exploreBtn').addEventListener('click', () => {
+  explorePrompt.style.display = 'none';
+  exploreOthers();
+});
+
+// Walk through the glowing door: haze in, push, then arrive in the shared room
+async function exploreOthers() {
+  state.isTransitioning = true;
+  setHaze(true);
+  if (!reduceMotion) state.dollyTarget = PUSH_Z;
+  await wait(1600);
+  location.href = savedDreamId ? `shared.html?me=${savedDreamId}` : 'shared.html';
+}
 newDreamBtn.addEventListener('click', () => {
   flow.step = 1;
   flow.answers = [];
+  flow.versions = [];
+  setRoom(0);
   lastPaintingUrl = null;
   doorQuestions.scene = doorQuestions.feeling = null;
   newDreamBtn.style.display = 'none';
@@ -524,8 +625,8 @@ submitDreamBtn.addEventListener('click', async () => {
     setDoorQuestions();
     setDoorsVisible(true);
   } else {
-    flow.step = 'done';
-    newDreamBtn.style.display = '';
+    flow.step = 'pick';
+    showPicker();
   }
 });
 

@@ -62,6 +62,20 @@
   <!-- Cinema cut: brief fade to dark when a new version arrives -->
   <div id="cut" class="cut-overlay"></div>
 
+  <!-- After step 3: pick the version that feels closest -->
+  <div id="picker" class="picker" style="display: none">
+    <p class="picker-kicker">Your dream is complete</p>
+    <p class="picker-title">Which version feels closest?</p>
+    <div class="picker-dots" id="pickerDots"></div>
+    <button id="pickBtn" class="pill-btn accent">This one</button>
+  </div>
+
+  <!-- After saving: invitation to the shared room -->
+  <div id="explorePrompt" class="picker" style="display: none">
+    <p class="picker-title">Would you like to explore other dreams?</p>
+    <button id="exploreBtn" class="pill-btn accent">Explore</button>
+  </div>
+
   <!-- Start a dream (bottom centre) -->
   <div class="dream-start">
     <button id="newDreamBtn" class="pill-btn accent" title="Start a new dream">
